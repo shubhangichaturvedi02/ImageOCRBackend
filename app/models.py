@@ -20,14 +20,10 @@ class User(db.Model):
     last_login = db.Column(db.DATETIME)
     jwt_token = db.Column(db.Text)
 
-class SentEmail(db.Model):
-    __table_args__ = {
-        'schema': 'public'
-    }
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    public_id = db.Column(db.String(50), unique=True)
-    user_id = db.Column(db.Integer)
-    subject = db.Column(db.Text)
-    body = db.Column(db.Text)
-    received = db.Column(db.Boolean)
-    sent_time = db.Column(DateTime(timezone=True))
+class ImageData(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    data = db.Column(db.Text, nullable=False)
+    name = db.Column(db.Text, nullable=False)
+    extracted_text = db.Column(db.Text, nullable=False)
+    bold_text = db.Column(db.Text, nullable=False)
+    created_on = db.Column(DateTime(timezone=True), server_default=func.now())

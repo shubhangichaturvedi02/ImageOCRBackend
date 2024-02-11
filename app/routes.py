@@ -4,9 +4,17 @@ import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from functools import wraps
-from app import app, db, api, mail
+from app import app, db, api
 from flask_restful import Resource
-from app.models import User, SentEmail
+from app.models import User, ImageData
+import base64
+from PIL import Image
+import pytesseract
+import re
+import cv2
+import os
+import numpy as np
+
 import traceback
 from flask_jwt_extended import (
     create_access_token,
@@ -15,30 +23,15 @@ from flask_jwt_extended import (
     jwt_required
 )
 
-from flask_mail import Mail, Message
-
-base_url = 'https://0872-2405-201-401f-1161-9046-94cf-85-c7ff/'
 
 
 
 
-@app.route("/mails_sent", methods=["GET"])
-@jwt_required()
-def mails_sent():
-    current_user = get_jwt_identity()
-    user:User = User.query.filter(User.id == current_user).first()
-    if not user.jwt_token:
-        return make_response(jsonify({'message' :'Logged Out'}),200)
-    response_data = []
-    sent_mails:SentEmail = SentEmail.query.filter(SentEmail.user_id == current_user ).all()
-    for sent_mail in sent_mails:
-        data = {
-            'subject':sent_mail.subject,
-            'body': sent_mail.body,
-            'received_time':sent_mail.sent_time
-        }
-        response_data.append(data)
-    return make_response(jsonify({'data' :response_data}),200)
+UPLOAD_FOLDER = 'images'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+
 
    
 @app.route("/logout", methods=["GET"])
@@ -51,78 +44,6 @@ def logout():
     except:
         print(traceback.format_exc())
         return make_response(jsonify({"message":"Some Error occured"}), 400)
-
-
-
-@app.route("/image", methods=["GET"])
-def render_image():
-    mailID = int(request.args.get('type'))
-
-    sent_email = SentEmail.query.filter(SentEmail.id == mailID).first()
-
-    if sent_email:
-        sent_email.received = True
-        try:
-            db.session.commit()
-        except:
-            print(traceback.format_exc())
-    print("Mail Id", mailID)
-
-    return send_file('news.png', mimetype='image/gif')
-
-
-
-
-@app.route("/mail", methods=["GET"])
-def send_daily_mail():
-   
-   # html = '''
-    # <html>
-    #     <body>
-    #         <h1>Daily S&P 500 prices report</h1>
-    #         <p>Hello, welcome to your report!</p>
-    #     </body>
-    # </html>
-    # '''
-    users:User = User.query.all()
-    for user in users:
-        failed = False
-        print(user)
-        sent_email = SentEmail()
-        sent_email.user_id = user.id
-        sent_email.subject = 'Tech Blog'
-        sent_email.body = f'<img src={base_url}image?type={user.id}></img>'
-        sent_email.sent_time = datetime.utcnow()
-
-        try:
-            db.session.add(sent_email)
-            db.session.flush()
-            mail_id = sent_email.id
-            print(mail_id)
-            db.session.commit()
-        except:
-            db.session.rollback()
-            print(traceback.format_exc())
-            failed = True
-        
-        
-        if not failed:
-            print("sss")
-            context={
-                "image": f'{base_url}image?type={mail_id}'
-                }
-            msg = Message(
-                        'Tech Blog',
-                        sender = 'mailsendertestdaily@gmail.com',
-                        recipients = [user.email],
-                        extra_headers={'Disposition-Notification-To': "chaturvedi.sshubhangi@gmail.com"}
-                    )
-            msg.html = render_template('template.html',**context)
-            # msg.body = f'<img src={base_url}image?type={user.id}></img>'
-            mail.send(msg)
-
-    return make_response(jsonify({'data' :'Hello'}),200)
-
 
 
 
@@ -143,8 +64,24 @@ class Signup(Resource):
 
         try:
             db.session.add(new_user)
+            db.session.flush()
+            user_id = User.id
             db.session.commit()
-            return make_response(jsonify({"message": "New user Created Successfully"}), 200)
+            user = User.query.filter(User.email == data['email']).first()
+            access_token = create_access_token(identity=user.id, fresh=True)
+            User.query.filter(User.email == data['email']).update({"jwt_token":access_token},False)
+            try:
+                db.session.commit()
+            except:
+                print(traceback.format_exc())
+            refresh_token = create_refresh_token(user.id)
+            return make_response(jsonify( {
+                'access_token': access_token,
+                'is_admin': user.admin
+            }), 200)
+            # return make_response(jsonify({"message": "New user Created Successfully",
+            #                                 'access_token': access_token,
+            #                             'is_admin': user.admin}), 200)
         except:
             db.session.rollback()
             print(traceback.format_exc())
@@ -179,49 +116,142 @@ class userLogin(Resource):
         return make_response(jsonify({"message": "Invalid credentials"}), 400)
 
 
+class ImageUpload(Resource):
 
-@app.route("/mail-analytics", methods=["GET"])
-@jwt_required()
-def mail_analytics():
-    sent_mails = SentEmail.query.all()
-    response_data = {
-        'opened_mails':[],
-        'not_opened_mails':[],
-        'received_count':0,
-        'not_received_count':0
+    def post(self):
+        # Check if image file is present in the request
+        if 'image' not in request.files:
+            return {'message': 'No image file provided'}, 400
 
-    }
-    for sent_mail in sent_mails:
-        user_name:User = User.query.filter(User.id == sent_mail.user_id).with_entities(User.name).first()
-        data = {
-            'subject': sent_mail.subject,
-            'body': sent_mail.body,
-            'sent_time': sent_mail.sent_time,
-            'user_name': user_name.name
-        }
-        if sent_mail.received:
-            response_data['opened_mails'].append(data)
-            response_data['received_count']+= 1
+        image_file = request.files['image']
+        filename = os.path.join(UPLOAD_FOLDER, image_file.filename)
+        image_file.save(filename)
 
-        else:
-            response_data['not_opened_mails'].append(data)
-            response_data['not_received_count']+= 1
+        file_content = image_file.read()
+        file_base64 = base64.b64encode(file_content).decode()
 
-    
-    return make_response(jsonify(
-                                {'opened_mails': response_data['opened_mails'],
-                                    'not_opened_mails': response_data['not_opened_mails'],
-                                    'data_breakup':[
-                                      {
-                                        'name': 'Not Received/Opened Mails',
-                                       'value':  response_data['received_count']
-                                       },
-                                      {
-                                       'name': 'Received/Opened Mails',
-                                       'value': response_data['not_received_count']
-                                      }
-                                  ]}), 200)
+        # image = cv2.imdecode(np.frombuffer(image_file.read(), np.uint8), cv2.IMREAD_COLOR)
+        # _, img_encoded = cv2.imencode('.png', image)
+        # img_base64 = base64.b64encode(img_encoded).decode()
+
+        # bold_text = self.extract_bold_text(filename)
+        img = cv2.imread(filename)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Apply thresholding to binarize the image
+        thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)[1]
+
+        # Perform morphological operations to enhance text regions
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        marker = cv2.dilate(thresh, kernel, iterations=1)
+        mask = cv2.erode(thresh, kernel, iterations=1)
+
+        while True:
+            tmp = marker.copy()
+            marker = cv2.erode(marker, None)
+            marker = cv2.max(mask, marker)
+            difference = cv2.subtract(tmp, marker)
+            if cv2.countNonZero(difference) == 0:
+                break
+
+        # Perform bitwise OR operation to combine the original image with the marker
+        result = cv2.bitwise_or(img, cv2.cvtColor(marker, cv2.COLOR_GRAY2BGR))
+
+
+
+        # Use Tesseract OCR to extract text from the result image
+        extracted_text_bold = pytesseract.image_to_string(result)
+
+        # Print the extracted text
+        print("Extracted Text:")
+        print(extracted_text_bold)
+
+
+
+        # Convert image to base64
+        # image_data = base64.b64encode(image_file.read()).decode('utf-8')
+
+
+        # Extract text from the image using Tesseract OCR
+        extracted_text = self.extract_text_from_image(image_file)
+
+        new_image = ImageData(data=file_base64 , extracted_text=extracted_text, bold_text=extracted_text_bold)
+        db.session.add(new_image)
+        db.session.commit()
+
+
+        return {'extracted_text': extracted_text, 'bold_words': extracted_text_bold, 'image_data': file_base64,'name':image_file.filename}
+
+    def extract_text_from_image(self, image_file):
+        try:
+            image = Image.open(image_file)
+            text = pytesseract.image_to_string(image)
+            return text
+        except Exception as e:
+            return str(e)
+    # def preprocess_image(self,image_path):
+    #     # Load the image
+    #     image = cv2.imread(image_path)
+    #
+    #     # Convert the image to grayscale
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #
+    #     # Apply thresholding to binarize the image
+    #     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    #
+    #     return binary
+    #
+    # # Function to extract bold text from the preprocessed image
+    # def extract_bold_text(self,image_path):
+    #     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    #
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #
+    #     #Apply thresholding to remove noise and convert the image to binary
+    #     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    #
+    #     # Set up a marker to dilate the information based on a 5x5 rectangle
+    #     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+    #     dilated = cv2.dilate(binary, kernel_dilate, iterations=1)
+    #
+    #     # Set up a mask to erode the information using a 3x3 rectangle
+    #     kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 6))
+    #     eroded = cv2.erode(dilated, kernel_erode, iterations=1)
+    #     result = cv2.bitwise_and(image, image, mask=eroded)
+    #     extracted_text = pytesseract.image_to_string(result)
+    #
+    #
+    #
+    #     # Print the extracted text
+    #     print("#$$$$$$$$$$$$$$$$$$$$$$$$$",extracted_text)
+    #     # Preprocess the image
+    #     # binary_image = self.preprocess_image(image_path)
+    #     # print(binary_image)
+    #     #
+    #     # # Use Tesseract OCR to extract text from the image
+    #     # extracted_text = pytesseract.image_to_string(binary_image)
+    #     # print(extracted_text)
+    #     #
+    #     # # Split the extracted text into words
+    #     # words = extracted_text.split()
+    #     #
+    #     # # Initialize a list to store bold words
+    #     # bold_words = []
+    #     #
+    #     # # Check if each word is bold
+    #     # for word in words:
+    #     #     # Check if the word is surrounded by asterisks, indicating bold formatting
+    #     #     if word.startswith('**') and word.endswith('**'):
+    #     #         bold_words.append(word[2:-2])  # Remove asterisks and add the word to the list of bold words
+    #
+    #     return extracted_text
+
+    # Path to the image file
+
+
+
 
     
 api.add_resource(Signup,'/signup')
 api.add_resource(userLogin,'/login')
+api.add_resource(ImageUpload,'/upload')
