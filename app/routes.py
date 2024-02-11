@@ -117,7 +117,7 @@ class userLogin(Resource):
 
 
 class ImageUpload(Resource):
-
+    @jwt_required()
     def post(self):
         # Check if image file is present in the request
         if 'image' not in request.files:
@@ -130,10 +130,7 @@ class ImageUpload(Resource):
         file_content = image_file.read()
         file_base64 = base64.b64encode(file_content).decode()
 
-        # image = cv2.imdecode(np.frombuffer(image_file.read(), np.uint8), cv2.IMREAD_COLOR)
-        # _, img_encoded = cv2.imencode('.png', image)
-        # img_base64 = base64.b64encode(img_encoded).decode()
-
+       
         # bold_text = self.extract_bold_text(filename)
         img = cv2.imread(filename)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -189,64 +186,6 @@ class ImageUpload(Resource):
             return text
         except Exception as e:
             return str(e)
-    # def preprocess_image(self,image_path):
-    #     # Load the image
-    #     image = cv2.imread(image_path)
-    #
-    #     # Convert the image to grayscale
-    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    #
-    #     # Apply thresholding to binarize the image
-    #     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    #
-    #     return binary
-    #
-    # # Function to extract bold text from the preprocessed image
-    # def extract_bold_text(self,image_path):
-    #     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    #
-    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    #
-    #     #Apply thresholding to remove noise and convert the image to binary
-    #     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    #
-    #     # Set up a marker to dilate the information based on a 5x5 rectangle
-    #     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
-    #     dilated = cv2.dilate(binary, kernel_dilate, iterations=1)
-    #
-    #     # Set up a mask to erode the information using a 3x3 rectangle
-    #     kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 6))
-    #     eroded = cv2.erode(dilated, kernel_erode, iterations=1)
-    #     result = cv2.bitwise_and(image, image, mask=eroded)
-    #     extracted_text = pytesseract.image_to_string(result)
-    #
-    #
-    #
-    #     # Print the extracted text
-    #     print("#$$$$$$$$$$$$$$$$$$$$$$$$$",extracted_text)
-    #     # Preprocess the image
-    #     # binary_image = self.preprocess_image(image_path)
-    #     # print(binary_image)
-    #     #
-    #     # # Use Tesseract OCR to extract text from the image
-    #     # extracted_text = pytesseract.image_to_string(binary_image)
-    #     # print(extracted_text)
-    #     #
-    #     # # Split the extracted text into words
-    #     # words = extracted_text.split()
-    #     #
-    #     # # Initialize a list to store bold words
-    #     # bold_words = []
-    #     #
-    #     # # Check if each word is bold
-    #     # for word in words:
-    #     #     # Check if the word is surrounded by asterisks, indicating bold formatting
-    #     #     if word.startswith('**') and word.endswith('**'):
-    #     #         bold_words.append(word[2:-2])  # Remove asterisks and add the word to the list of bold words
-    #
-    #     return extracted_text
-
-    # Path to the image file
 
 
 
