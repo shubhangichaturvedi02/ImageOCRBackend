@@ -130,7 +130,7 @@ class ImageUpload(Resource):
         file_content = image_file.read()
         file_base64 = base64.b64encode(file_content).decode()
 
-       
+
         # bold_text = self.extract_bold_text(filename)
         img = cv2.imread(filename)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
